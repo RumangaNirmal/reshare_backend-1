@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && request.auth.token.role == 'admin'; }
+    function validFile() { return request.resource.size < 10 * 1024 * 1024 && request.resource.contentType.matches('image/(jpeg|png|webp)|application/pdf'); }
+    match /avatars/{uid}/{fileName} { allow read: if signedIn(); allow write: if owner(uid) && validFile(); allow delete: if owner(uid); }
+    match /items/{uid}/{fileName} { allow read: if signedIn(); allow write: if owner(uid) && validFile(); allow delete: if owner(uid); }
+    match /requests/{uid}/{fileName} { allow read: if signedIn(); allow write: if owner(uid) && validFile(); allow delete: if owner(uid); }
+    match /verification/{uid}/{fileName} { allow read: if admin() || owner(uid); allow write: if owner(uid) && validFile(); allow delete: if admin() || owner(uid); }
+    match /{allPaths=**} { allow read, write: if false; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+  }
+}

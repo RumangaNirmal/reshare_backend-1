@@ -1,58 +1,101 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# ReShare Firebase Backend
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Production-oriented Firebase backend for the ReShare Flutter application in Sri Lanka.
 
-## About Laravel
+## Architecture
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
-
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```mermaid
+flowchart LR
+  Flutter --> Auth[Firebase Auth]
+  Flutter --> Functions[Cloud Functions v2]
+  Flutter --> Firestore[(Cloud Firestore)]
+  Flutter --> Storage[(Cloud Storage)]
+  Functions --> Firestore
+  Functions --> FCM[Firebase Cloud Messaging]
+  Functions --> Analytics[Analytics aggregate]
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Flutter uses Firebase Auth for phone, email, and Google sign-in. It calls the exported callable functions for business operations. Firestore and Storage rules remain deny-by-default; privileged mutations happen in the Admin SDK inside Functions.
 
-## Contributing
+## Setup
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+1. Install Node.js 20, Firebase CLI, and Java 11+ for the emulator suite.
+2. Create a Firebase project, enable Auth providers (Phone, Email/Password, Google), Firestore, Storage, FCM, App Check, Analytics, Crashlytics, and Remote Config.
+3. Replace `your-firebase-project-id` in `.firebaserc`.
+4. Run `firebase login`, then `cd functions && npm install`.
+5. Copy `functions/.env.example` to `functions/.env` and set project-specific values.
+6. Deploy with `firebase deploy --config firebase.json` from this directory.
 
-## Code of Conduct
+## Local development
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+cd functions
+npm install
+npm run build
+cd ..
+firebase emulators:start --only auth,functions,firestore,storage
+```
 
-## Security Vulnerabilities
+Use the Firebase Flutter emulator connectors during local development. Never use production credentials in the emulator.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## Authentication contract
 
-## License
+The Flutter app must use the Firebase Auth SDK for OTP delivery and verification (`verifyPhoneNumber`), email verification/password reset, and Google OAuth. `sendPhoneOtp` validates the Sri Lankan `+94XXXXXXXXX` contract and returns the client action; Firebase Auth, not a server callable, sends the SMS. After client verification, `verifyPhoneOtp` syncs the verified phone flag.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Set admin claims from a secured operator environment only:
+
+```ts
+await getAuth().setCustomUserClaims(uid, { role: 'admin' });
+```
+
+Supported claims are `user`, `moderator`, and `admin`; clients must refresh their ID token after a claim change.
+
+## Firestore schema
+
+`users/{userId}` stores profile, language, location, verification flags, impact counters, and role. `users/{userId}/fcmTokens/{token}` stores device registration. `users/{userId}/notifications/{notificationId}` stores notification history.
+
+`items/{itemId}`: `ownerId`, `title`, `description`, `category`, `condition`, `images[]`, `location { city, district, province, lat, lng }`, `tags[]`, `status`, `claimsCount`, `createdAt`, `updatedAt`.
+
+`claims/{claimId}`: `itemId`, `donorId`, `claimantId`, `status` (`pending`, `accepted`, `rejected`, `completed`), timestamps.
+
+`requests/{requestId}`: `requesterId`, `title`, `description`, `reason`, `urgency`, `supportingDocuments[]`, `status` (`open`, `fulfilled`, `closed`), timestamps.
+
+`verifications/{verificationId}`: `userId`, `type` (`student`, `ngo`, `nationalId`), `documents[]`, `status` (`pending`, `approved`, `rejected`), timestamps.
+
+`impactMetrics/{userId}` stores `itemsShared`, `itemsReceived`, `requestsFulfilled`, `co2SavedKg`, `badges[]`. It is written only by trusted Functions.
+
+## Callable API
+
+| Function | Purpose |
+| --- | --- |
+| `createUserProfile`, `updateProfile`, `getCurrentUser`, `deleteUser` | Profile lifecycle |
+| `createItem`, `updateItem`, `deleteItem`, `getItem`, `getMyItems`, `searchItems` | Item lifecycle and discovery |
+| `claimItem`, `acceptClaim`, `rejectClaim`, `completeClaim` | Claim workflow |
+| `createRequest`, `updateRequest`, `closeRequest`, `fulfillRequest` | Community requests |
+| `uploadAvatar`, `uploadVerificationDocuments` | Finalize Storage uploads |
+| `saveFcmToken`, `sendNotification`, `markNotificationRead`, `markAllNotificationsRead` | Notifications |
+| `approveVerification`, `rejectVerification` | Admin moderation |
+| `calculateImpact`, `assignBadges` | Impact and badges |
+
+Callables require an authenticated Firebase user unless documented as an admin operation. Errors use standard `HttpsError` codes.
+
+## Storage
+
+The Flutter client uploads to `avatars/{uid}/`, `items/{uid}/`, `requests/{uid}/`, or `verification/{uid}/`. Files are limited to 10 MB and `image/jpeg`, `image/png`, `image/webp`, or `application/pdf`. Use Firebase download URLs in the corresponding document. Verification files are readable only by the owner or an admin.
+
+## Deployment and CI
+
+```bash
+firebase deploy --only firestore:rules,firestore:indexes,storage
+firebase deploy --only functions
+```
+
+The workflow in `.github/workflows/firebase.yml` installs Functions dependencies, builds TypeScript, and deploys on pushes to `main`. Store `FIREBASE_TOKEN` or workload identity credentials in GitHub Actions secrets; do not commit service-account JSON.
+
+## Cost and security notes
+
+- Paginate every feed and keep callable limits bounded; the included search limit is 50.
+- Keep Analytics and Crashlytics enabled in Flutter, but aggregate admin dashboard counters daily rather than scanning collections per request.
+- App Check enforcement should be enabled after registering all production Flutter app IDs and completing rollout monitoring.
+- Rules protect direct client access, while Functions enforce state transitions and custom claims.
+- Review indexes and scheduled-job volume in the Firebase usage console before increasing limits.
